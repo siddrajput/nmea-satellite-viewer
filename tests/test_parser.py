@@ -112,6 +112,18 @@ def test_bad_checksum_rejected():
     print("PASS test_bad_checksum_rejected")
 
 
+def test_signal_id_8_l5q():
+    p = NmeaParser()
+    p.feed_line(sent("GPGSV,1,1,01,04,40,070,42,8"))
+    sats = p.get_satellites()
+    assert len(sats) == 1
+    s = sats[0]
+    assert s.signal_id == 8
+    assert s.band == "L5", s.band
+    assert s.signal_name == "L5-Q", s.signal_name
+    print("PASS test_signal_id_8_l5q")
+
+
 def test_empty_snr_kept():
     p = NmeaParser()
     # satellite visible but no C/No reported
@@ -129,5 +141,6 @@ if __name__ == "__main__":
     test_rmc()
     test_gsa()
     test_bad_checksum_rejected()
+    test_signal_id_8_l5q()
     test_empty_snr_kept()
     print("All parser tests passed.")
