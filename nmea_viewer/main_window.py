@@ -8,10 +8,11 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QMainWindow, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .io import BAUD_RATES, NmeaSimulator, SerialReader, list_serial_ports
+from .map_view import MapView
 from .parser import BAND_ORDER, NmeaParser
 
 BAND_COLORS = {
@@ -52,7 +53,12 @@ class MainWindow(QMainWindow):
         self.plot.setYRange(0, 60)
         self.plot.showGrid(x=False, y=True, alpha=0.3)
         chart_layout.addWidget(self.plot)
-        splitter.addWidget(chart_box)
+
+        tabs = QTabWidget()
+        tabs.addTab(chart_box, "C/No")
+        self.map_view = MapView()
+        tabs.addTab(self.map_view, "Map")
+        splitter.addWidget(tabs)
 
         table_box = QGroupBox("Satellites in view")
         table_layout = QVBoxLayout(table_box)
@@ -223,6 +229,8 @@ class MainWindow(QMainWindow):
         self._update_bars(visible)
         self._update_table(sats)
         self._update_info()
+        self.map_view.update_position(
+            self.parser.fix.get("latitude"), self.parser.fix.get("longitude"))
 
     def _update_bars(self, sats: list) -> None:
         if self._bars is not None:
