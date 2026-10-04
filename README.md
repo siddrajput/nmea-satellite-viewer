@@ -19,6 +19,8 @@ data.
 - Satellite table: PRN, constellation, band, signal, elevation, azimuth, C/No
 - Fix panel: UTC time/date, lat/lon, fix quality, sats used/in view,
   HDOP, PDOP/VDOP, speed, course
+- Live Google Map tab centered on the fix (no API key needed;
+  requires PyQtWebEngine)
 - Built-in NMEA simulator for testing without a receiver
 
 ## Install
@@ -69,6 +71,7 @@ nmea_viewer/
   parser.py              NMEA parsing (GSV/GGA/RMC/GSA), signal-ID -> band map
   io.py                  serial reader thread + NMEA simulator
   main_window.py         PyQt5 UI, pyqtgraph bar charts
+  map_view.py            live Google Map of the fix (embed API, no key)
 tests/
   test_parser.py         parser unit tests (run: python3 tests/test_parser.py)
 ```
