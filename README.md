@@ -19,6 +19,17 @@ data.
 - Satellite table: PRN, constellation, band, signal, elevation, azimuth, C/No
 - Fix panel: UTC time/date, lat/lon, fix quality, sats used/in view,
   HDOP, PDOP/VDOP, speed, course
+- **Skyplot** tab: polar plot of satellite azimuth/elevation, colored by
+  C/No or band
+- **C/No history** tab: per-satellite strip charts over a rolling 5-minute
+  window — spot fading, blockage, or multipath
+- **DOP** tab: HDOP/PDOP/VDOP trending over the same window
+- **Track** tab: position path in meters from the first fix, fix scatter
+  colored by fix quality, and accuracy stats (σE/σN, 2DRMS, span)
+- **Alerts** tab: configurable thresholds with a timestamped alert log —
+  C/No drops below a threshold, fix lost, satellites-in-view collapse
+- **Logging & replay**: record timestamped raw NMEA to `logs/`, then replay
+  any capture through the UI at 1×/4×/10×/60× speed
 - Live Google Map tab centered on the fix (no API key needed;
   requires PyQtWebEngine)
 - Built-in NMEA simulator for testing without a receiver

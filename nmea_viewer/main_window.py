@@ -1,19 +1,33 @@
-"""PyQt5 main window: live C/No bar graphs with L1/L5 band separation."""
+"""PyQt5 main window: live C/No bar graphs with L1/L5 band separation,
+plus skyplot, C/No history, DOP trends, position track, alerts,
+NMEA logging/replay, and a live map."""
 
 from __future__ import annotations
+
+import os
+import time
+from datetime import datetime
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-    QMainWindow, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QLabel, QMainWindow, QPushButton, QSplitter, QTableWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
+from .alerts import AlertEngine
+from .alerts_view import AlertsView
+from .cn0_history_view import Cn0HistoryView
+from .dop_view import DopView
+from .history import HistoryRecorder
 from .io import BAUD_RATES, NmeaSimulator, SerialReader, list_serial_ports
+from .logger import NmeaLogger, NmeaReplayer
 from .map_view import MapView
 from .parser import BAND_ORDER, NmeaParser
+from .skyplot import SkyplotView
+from .track_view import TrackView
 
 BAND_COLORS = {
     "L1": QColor(76, 154, 255),    # blue
@@ -33,6 +47,11 @@ class MainWindow(QMainWindow):
         self.reader: SerialReader | None = None
         self.sim: NmeaSimulator | None = None
         self._bars = None
+
+        self.history = HistoryRecorder(window_s=300.0)
+        self.alert_engine = AlertEngine()
+        self.nmea_logger = NmeaLogger()
+        self.replayer: NmeaReplayer | None = None
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -56,6 +75,17 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.addTab(chart_box, "C/No")
+        self.skyplot_view = SkyplotView()
+        tabs.addTab(self.skyplot_view, "Skyplot")
+        self.cn0_history_view = Cn0HistoryView()
+        tabs.addTab(self.cn0_history_view, "C/No history")
+        self.dop_view = DopView()
+        tabs.addTab(self.dop_view, "DOP")
+        self.track_view = TrackView()
+        self.track_view.on_clear(lambda: self.history.fixes.clear())
+        tabs.addTab(self.track_view, "Track")
+        self.alerts_view = AlertsView(self.alert_engine)
+        tabs.addTab(self.alerts_view, "Alerts")
         self.map_view = MapView()
         tabs.addTab(self.map_view, "Map")
         splitter.addWidget(tabs)
@@ -108,7 +138,27 @@ class MainWindow(QMainWindow):
         self.sim_check.toggled.connect(self._on_sim_toggled)
         bar.addWidget(self.sim_check)
 
+        self.log_btn = QPushButton("Log")
+        self.log_btn.setCheckable(True)
+        self.log_btn.setToolTip("Log raw NMEA sentences to a timestamped file")
+        self.log_btn.clicked.connect(self._toggle_logging)
+        self.log_btn.setEnabled(False)
+        bar.addWidget(self.log_btn)
+
+        self.replay_btn = QPushButton("Replay…")
+        self.replay_btn.setToolTip("Replay a logged NMEA file through the UI")
+        self.replay_btn.clicked.connect(self._start_replay)
+        bar.addWidget(self.replay_btn)
+
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["1×", "4×", "10×", "60×"])
+        self.speed_combo.setCurrentText("4×")
+        self.speed_combo.setToolTip("Replay speed")
+        bar.addWidget(self.speed_combo)
+
         bar.addStretch(1)
+        self.alert_status = QLabel("Alerts: OK")
+        bar.addWidget(self.alert_status)
         self.status_label = QLabel("Disconnected")
         bar.addWidget(self.status_label)
         return bar
@@ -175,6 +225,7 @@ class MainWindow(QMainWindow):
             self.sim.start()
             self.status_label.setText("Simulating NMEA data")
             self.connect_btn.setText("Disconnect")
+            self.log_btn.setEnabled(True)
             return
         port = self.port_combo.currentText()
         if not port:
@@ -188,14 +239,18 @@ class MainWindow(QMainWindow):
         self.reader.start()
         self.status_label.setText(f"Opening {port} @ {baud}…")
         self.connect_btn.setText("Disconnect")
+        self.log_btn.setEnabled(True)
 
     def _disconnect(self) -> None:
+        self._stop_logging()
+        self._stop_replay()
         if self.sim:
             self.sim.stop()
             self.sim = None
         if self.reader:
             self.reader.stop()
             self.reader = None
+        self.log_btn.setEnabled(False)
         self.status_label.setText("Disconnected")
         self.connect_btn.setText("Connect")
 
@@ -211,12 +266,75 @@ class MainWindow(QMainWindow):
 
     def _on_line(self, line: str) -> None:
         self.parser.feed_line(line)
+        self.nmea_logger.write(line)
+
+    # --------------------------------------------------- logging and replay
+    def _toggle_logging(self) -> None:
+        if self.nmea_logger.active:
+            self._stop_logging()
+        else:
+            os.makedirs("logs", exist_ok=True)
+            path = os.path.join(
+                "logs",
+                "nmea-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".log")
+            self.nmea_logger.start(path)
+            self.log_btn.setChecked(True)
+            self.log_btn.setText("Logging…")
+            self.status_label.setText(f"Logging to {path}")
+
+    def _stop_logging(self) -> None:
+        if self.nmea_logger.active:
+            self.nmea_logger.stop()
+        self.log_btn.setChecked(False)
+        self.log_btn.setText("Log")
+
+    def _start_replay(self) -> None:
+        if self.replayer is not None:
+            self._stop_replay()
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Replay NMEA log", "logs", "NMEA logs (*.log);;All files (*)")
+        if not path:
+            return
+        speed = float(self.speed_combo.currentText().replace("×", ""))
+        self.replayer = NmeaReplayer(path, speed=speed, parent=self)
+        if self.replayer.event_count == 0:
+            self.status_label.setText("Replay file has no NMEA sentences")
+            self.replayer = None
+            return
+        self.replayer.line_ready.connect(self._on_line)
+        self.replayer.finished.connect(self._on_replay_done)
+        self.replay_btn.setText("Stop replay")
+        self.connect_btn.setEnabled(False)
+        mins = self.replayer.duration_s / 60
+        self.status_label.setText(
+            f"Replaying {os.path.basename(path)} @ {speed:g}× "
+            f"({self.replayer.event_count} sentences, {mins:.1f} min logged)")
+        self.replayer.start()
+
+    def _stop_replay(self) -> None:
+        if self.replayer is not None:
+            try:
+                self.replayer.finished.disconnect(self._on_replay_done)
+            except TypeError:
+                pass
+            self.replayer.stop()
+            self.replayer = None
+        self.replay_btn.setText("Replay…")
+        self.connect_btn.setEnabled(True)
+
+    def _on_replay_done(self) -> None:
+        self.replayer = None
+        self.replay_btn.setText("Replay…")
+        self.connect_btn.setEnabled(True)
+        self.status_label.setText("Replay finished")
 
     # --------------------------------------------------------------- refresh
     def _enabled_bands(self) -> set[str]:
         return {b for b, cb in self.band_checks.items() if cb.isChecked()}
 
     def refresh(self) -> None:
+        now = time.time()
         self.parser.prune()
         sats = self.parser.get_satellites()
         enabled = self._enabled_bands()
@@ -226,11 +344,30 @@ class MainWindow(QMainWindow):
         self.count_label.setText(
             "   ".join(f"{b}: {counts[b]}" for b in ("L1", "L5", "L2", "Unknown")))
 
+        self.history.record_tick(sats, self.parser.fix, self.parser.gsa, now=now)
+
         self._update_bars(visible)
         self._update_table(sats)
         self._update_info()
+        self.skyplot_view.update(visible)
+        self.cn0_history_view.update(self.history)
+        self.dop_view.update(self.history)
+        self.track_view.update(self.history)
         self.map_view.update_position(
             self.parser.fix.get("latitude"), self.parser.fix.get("longitude"))
+
+        new_alerts = self.alert_engine.check(now, sats, self.parser.fix)
+        if new_alerts:
+            self.alerts_view.push(new_alerts)
+            n_crit = sum(1 for a in new_alerts if a.severity == "crit")
+            self.alert_status.setText(
+                f"Alerts: {len(new_alerts)} new"
+                + (" (CRIT)" if n_crit else ""))
+            self.alert_status.setStyleSheet(
+                "color: #c41e1e; font-weight: bold;")
+        elif self.alerts_view._list.count() == 0:
+            self.alert_status.setText("Alerts: OK")
+            self.alert_status.setStyleSheet("")
 
     def _update_bars(self, sats: list) -> None:
         if self._bars is not None:
@@ -293,5 +430,7 @@ class MainWindow(QMainWindow):
         set_text["course"].setText(f"{crs:.0f}" if crs is not None else "—")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self._stop_logging()
+        self._stop_replay()
         self._disconnect()
         super().closeEvent(event)

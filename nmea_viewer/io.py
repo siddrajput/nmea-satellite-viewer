@@ -174,5 +174,8 @@ class NmeaSimulator(QObject):
                 f"GPRMC,{hhmmss},A,{la},{la_h},{lo},{lo_h},"
                 f"0.0,0.0,{ddmmyy},,,A"))
             prns = ",".join(f"{pr:02d}" for _, pr, *_ in self._SKY[:12])
+            pdop = 2.5 + 0.4 * math.sin(t / 31.0)
+            hdop = 1.3 + 0.2 * math.sin(t / 23.0 + 1.0)
+            vdop = 2.1 + 0.3 * math.sin(t / 27.0 + 2.0)
             self.line_generated.emit(_sentence(
-                f"GPGSA,A,3,{prns},2.5,1.3,2.1"))
+                f"GPGSA,A,3,{prns},{pdop:.1f},{hdop:.1f},{vdop:.1f}"))
