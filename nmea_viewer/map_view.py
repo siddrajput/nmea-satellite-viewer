@@ -23,6 +23,24 @@ def map_embed_url(lat: float, lon: float, zoom: int = 16) -> str:
     return f"https://maps.google.com/maps?q={lat:.6f},{lon:.6f}&z={zoom}&output=embed"
 
 
+def map_embed_html(lat: float, lon: float, zoom: int = 16) -> str:
+    """Full-page wrapper for the embed URL.
+
+    Google's embed endpoint refuses to render as a top-level page
+    ("The Google Maps Embed API must be used in an iframe"), so the
+    map view loads this iframe wrapper instead. No API key required.
+    """
+    url = map_embed_url(lat, lon, zoom)
+    return (
+        "<html><head><meta charset='utf-8'>"
+        "<style>html,body{margin:0;height:100%}"
+        "iframe{border:0;width:100vw;height:100vh}</style>"
+        "</head><body>"
+        f"<iframe src='{url}' allowfullscreen></iframe>"
+        "</body></html>"
+    )
+
+
 def _distance_m(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
     """Equirectangular distance approximation; fine for short hops."""
     r = 6371000.0
@@ -64,4 +82,5 @@ class MapView(QWidget):
         if (self._lat is None
                 or _distance_m(self._lat, self._lon, lat, lon) >= self.RELOAD_THRESHOLD_M):
             self._lat, self._lon = lat, lon
-            self._view.load(QUrl(map_embed_url(lat, lon)))
+            # setHtml (not load): the embed URL must live inside an iframe.
+            self._view.setHtml(map_embed_html(lat, lon), QUrl("https://localhost/"))
