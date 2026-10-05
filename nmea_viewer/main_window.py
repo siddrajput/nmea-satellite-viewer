@@ -173,6 +173,7 @@ class MainWindow(QMainWindow):
             ("fix", "Fix"), ("sats", "Sats used/view"),
             ("hdop", "HDOP"), ("dop", "PDOP/VDOP"),
             ("speed", "Speed (kn)"), ("course", "Course (°)"),
+            ("sentences", "Sentences"), ("cksum_err", "Checksum errors"),
         ]
         for i, (key, title) in enumerate(fields):
             grid.addWidget(QLabel(f"<b>{title}:</b>"), i // 5, (i % 5) * 2)
@@ -341,8 +342,13 @@ class MainWindow(QMainWindow):
         visible = [s for s in sats if s.band in enabled]
 
         counts = {b: sum(1 for s in sats if s.band == b) for b in BAND_ORDER}
-        self.count_label.setText(
-            "   ".join(f"{b}: {counts[b]}" for b in ("L1", "L5", "L2", "Unknown")))
+        band_txt = "   ".join(f"{b}: {counts[b]}" for b in ("L1", "L5", "L2", "Unknown"))
+        const_counts: dict[str, int] = {}
+        for s in sats:
+            const_counts[s.code] = const_counts.get(s.code, 0) + 1
+        const_txt = " ".join(
+            f"{code}:{const_counts[code]}" for code in sorted(const_counts))
+        self.count_label.setText(f"{band_txt}    |    {const_txt}" if const_txt else band_txt)
 
         self.history.record_tick(sats, self.parser.fix, self.parser.gsa, now=now)
 
@@ -428,6 +434,11 @@ class MainWindow(QMainWindow):
         set_text["speed"].setText(f"{spd:.1f}" if spd is not None else "—")
         crs = fix.get("course_deg")
         set_text["course"].setText(f"{crs:.0f}" if crs is not None else "—")
+        set_text["sentences"].setText(str(self.parser.sentences_seen))
+        errs = self.parser.checksum_failures
+        set_text["cksum_err"].setText(str(errs))
+        set_text["cksum_err"].setStyleSheet(
+            "color: #c41e1e; font-weight: bold;" if errs else "")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self._stop_logging()

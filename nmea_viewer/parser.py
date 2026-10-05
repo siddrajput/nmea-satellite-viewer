@@ -143,6 +143,31 @@ def checksum_ok(line: str) -> bool:
         return False
 
 
+def _detect_gsv_width(blocks: list[str]) -> int:
+    """Detect the GSV satellite block width: 5 (NMEA 4.1 + signal ID) or 4.
+
+    A trailing comma (empty final field) is a common receiver quirk that
+    breaks naive modulo detection, turning e.g. PRN 04's elevation into a
+    phantom PRN 40. Strip the fewest trailing empty fields that yields an
+    unambiguous block count; on an exact tie prefer 5 (legacy sentences
+    carry at most 4 sats, so 20 fields can only be 4 x 5). A legitimately
+    empty final C/No (e.g. u-blox reporting an untracked sat) is left
+    alone because the un-stripped count is already unambiguous.
+    Falls back to 5 on ragged input.
+    """
+    n = len(blocks)
+    trailing = 0
+    while trailing < n and blocks[n - 1 - trailing] == "":
+        trailing += 1
+    for t in range(trailing + 1):
+        m = n - t
+        if m % 5 == 0:
+            return 5
+        if m % 4 == 0:
+            return 4
+    return 5  # best effort on ragged input
+
+
 class NmeaParser:
     """Stateful NMEA parser. Feed it lines; read back satellites and fix."""
 
@@ -185,14 +210,14 @@ class NmeaParser:
         return stype
 
     # ------------------------------------------------------------- snapshots
-    def get_satellites(self, max_age: float = 15.0) -> list[Satellite]:
+    def get_satellites(self, max_age: float = 30.0) -> list[Satellite]:
         """Satellites updated within max_age seconds, sorted L1, L5, L2..."""
         now = time.time()
         sats = [s for s in self.satellites.values() if now - s.last_update <= max_age]
         sats.sort(key=lambda s: (BAND_ORDER.get(s.band, 9), s.code, s.prn))
         return sats
 
-    def prune(self, max_age: float = 15.0) -> None:
+    def prune(self, max_age: float = 30.0) -> None:
         now = time.time()
         stale = [k for k, s in self.satellites.items() if now - s.last_update > max_age]
         for k in stale:
@@ -204,24 +229,26 @@ class NmeaParser:
             return
         name, code = CONSTELLATIONS.get(talker, (talker, talker))
         blocks = fields[3:]
-
-        # NMEA 4.1+ appends a signal-ID field to each satellite block.
-        # A legacy 2.x sentence always carries a multiple of 4 fields, and
-        # can never be a multiple of 5 (max 4 sats per sentence), so the
-        # modulo test below is unambiguous.
+        width = _detect_gsv_width(blocks)
         n = len(blocks)
-        if n % 5 == 0:
-            width = 5
-        elif n % 4 == 0:
-            width = 4
-        else:
-            width = 5  # best effort on ragged input
 
         for i in range(0, n, width):
             chunk = blocks[i:i + width] + [""] * (width - len(blocks[i:i + width]))
             prn = _to_int(chunk[0])
             if prn is None:
                 continue
+            # NMEA 2.3 packs non-GPS constellations into GPGSV by PRN range:
+            # 33-64 = SBAS, 65-96 = GLONASS (slot + 64), 193-199 = QZSS.
+            # Modern receivers use dedicated talkers; this only fixes the
+            # legacy packing, keyed on the GP talker.
+            sat_name, sat_code, sat_prn = name, code, prn
+            if talker == "GP":
+                if 33 <= prn <= 64:
+                    sat_name, sat_code = "SBAS", "S"
+                elif 65 <= prn <= 96:
+                    sat_name, sat_code, sat_prn = "GLONASS", "R", prn - 64
+                elif 193 <= prn <= 199:
+                    sat_name, sat_code = "QZSS", "J"
             signal_id = _to_int(chunk[4]) if width == 5 else None
             band, signal_name = SIGNAL_IDS.get(
                 signal_id if signal_id is not None else 0,
@@ -235,9 +262,9 @@ class NmeaParser:
 
             key = (talker, prn, key_sig)
             self.satellites[key] = Satellite(
-                constellation=name,
-                code=code,
-                prn=prn,
+                constellation=sat_name,
+                code=sat_code,
+                prn=sat_prn,
                 elevation=_to_float(chunk[1]),
                 azimuth=_to_float(chunk[2]),
                 cn0=_to_float(chunk[3]),

@@ -74,6 +74,20 @@ Receivers on older NMEA 2.x firmware omit the signal ID; those satellites show
 as band **Unknown** (gray). The same PRN tracked on two bands appears as two
 bars (e.g. G04 on L1 and L5).
 
+## Troubleshooting
+
+- **Missing C/No values / satellites**: the fix panel shows live
+  **Sentences** and **Checksum errors** counters. If checksum errors climb,
+  the baud rate is usually wrong (garbled data fails validation) — try
+  9600 or 38400. A "—" C/No with no checksum errors means the receiver
+  reported the satellite but isn't tracking it (empty SNR field), which is
+  normal for sats below the tracking threshold.
+- **Band shows Unknown for everything**: the receiver is sending NMEA 2.x /
+  4.0 GSV without signal IDs. Enable NMEA 4.1 output on the receiver if it
+  supports it (u-blox: CFG-NMEA) to get L1/L5/L2 separation.
+- Satellites stay listed for 30 s after their last GSV update, so slow
+  multi-constellation GSV cycles don't make them flicker.
+
 ## Project layout
 
 ```
@@ -83,8 +97,14 @@ nmea_viewer/
   io.py                  serial reader thread + NMEA simulator
   main_window.py         PyQt5 UI, pyqtgraph bar charts
   map_view.py            live Google Map of the fix (embed API, no key)
+  skyplot.py             polar az/el sky view
+  history.py             rolling C/No / DOP / fix history
+  alerts.py              C/No-drop, fix-lost, sats-in-view alert engine
+  logger.py              timestamped NMEA logging + replay
+  *_view.py              C/No history, DOP trend, position track, alerts tabs
 tests/
   test_parser.py         parser unit tests (run: python3 tests/test_parser.py)
+  test_gsv_robustness.py GSV edge cases: trailing commas, PRN remapping
 ```
 
 ## License
